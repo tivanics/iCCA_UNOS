@@ -1,0 +1,1289 @@
+---
+title: "UNOS"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 10, fig.height = 12, results="asis")
+```
+
+
+```{r}
+library(ggplot2)
+library(survminer)
+library(survival)
+library(dplyr)
+library(tidyverse)
+library(data.table) 
+library(forestmodel) 
+library(Hmisc) 
+library(sjPlot) 
+library(stargazer) 
+library(sjmisc) 
+library(arsenal) 
+library(gtsummary)
+library(expss) 
+library(lubridate)
+library(ggsignif)
+library(haven)
+options(scipen=999)
+```
+
+**Read in data**
+```{r}
+unosdata <- read_csv("/Users/Ivanics/Desktop/UNOSDATA.csv", guess_max = 300000)
+```
+
+**Recoding and renaming**
+```{r}
+unosdata <- unosdata %>% 
+  rename(REGID=PT_CODE)
+
+#Keep analysis from 2008 onwards
+unosdata <- unosdata %>% filter(
+  TX_YEAR >= 2008 & TX_YEAR <= 2018
+)
+
+#Rename TX_YEAR variable
+unosdata <- unosdata %>%
+  rename(TX_YR = TX_YEAR)
+
+#Remove missing survival information
+unosdata <- unosdata %>% filter(
+  GTIME >= 0
+)
+
+unosdata <- unosdata %>% filter(
+  PTIME >= 0
+)
+
+#Keep only adult patients
+unosdata <- unosdata %>% filter(
+  AGE >= 18
+)
+
+unosdata <- unosdata %>% 
+  rename(RAGE = AGE)
+
+#Limit to first-time liver only transplants 
+unosdata <- unosdata %>% filter(
+  NUM_PREV_TX == 0 & PREV_TX == "N"
+)
+
+unosdata <- unosdata %>% filter(
+  is.na(MULTIORG)
+)
+
+
+unosdata <- unosdata %>% filter(
+  TX_PROCEDUR_TY != 704
+)
+
+unosdata <- unosdata %>% 
+  rename(GSURV = GTIME,
+         GCENS = GSTATUS,
+         PSURV = PTIME,
+         PCENS = PSTATUS
+         )
+
+#Drop liver cancer patients who do NOT have HCC
+#unosdata <- unosdata %>% mutate(
+#  LC = case_when(
+#    DIAG == 4402 ~ 1,
+#    DIAG == 4403 ~ 1,
+#    DIAG == 4404 ~ 1,
+#    DIAG == 4405 ~ 1, 
+#    DIAG == 4420 ~ 1,
+#    DIAG == 4430 ~ 1,
+#    DIAG == 4410 ~ 1,
+#    TRUE ~ 0
+#  )
+#)
+
+unosdata %>% filter(DIAG == 4403 | DIAG == 4420) %>% select(EXC_OTHER_DIAG, DGN_OSTXT_TCR, DGN2_OSTXT_TCR, DIAG_OSTXT) %>% View()
+```
+
+**Donor characteristics**
+```{r}
+#Donor age
+unosdata <- unosdata %>% rename(
+  DAGE = AGE_DON
+)
+
+#Donor type
+unosdata$DCD <- 
+  recode(unosdata$NON_HRT_DON,
+                               c("Y"~1,
+                                 "N"~0
+                                 ))
+
+unosdata$LDLT <- 
+  recode(unosdata$DON_TY,
+                               c("L"~1,
+                                 "C"~0
+                                 ))
+
+unosdata <- unosdata %>% mutate(
+  DTYPE = case_when(
+    DCD == 1 ~ 1,
+    LDLT == 1 ~ 2,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  DTYPE = factor(DTYPE, labels = c("DBD", "DCD", "LDLT")) 
+)
+
+#Cause of death
+unosdata <- unosdata %>% mutate(
+  DONCOD = case_when(
+    COD_CAD_DON == 3 ~ 1,
+    COD_CAD_DON == 2 ~ 2,
+    COD_CAD_DON == 1 ~ 3,
+    COD_CAD_DON == 4 ~ 4
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  DONCOD = factor(DONCOD, labels = c("Trauma", "CVA", "Cerebral Anoxia", "Other")) 
+)
+
+#BMI
+unosdata <- unosdata %>% rename(DBMI = BMI_DON_CALC)
+
+#Donor sex
+unosdata$DSEX <- 
+  recode(unosdata$GENDER_DON,
+                               c("F"~0,
+                                 "M"~1
+                                 ))
+
+
+unosdata <- unosdata %>% mutate(
+  DSEX = factor(DSEX, labels = c("Female", "Male"))
+)
+
+#Donor ABO match
+unosdata <- unosdata %>% mutate(BLD_GP_MATCH = factor(ABO_MAT, labels = c("Identical", "Compatible", "Incompatible")))
+
+#Donor graft type
+unosdata <- unosdata %>% mutate(
+  GRAFT_TYPE = case_when(
+    TX_PROCEDUR_TY == 701 ~ 1,
+    TX_PROCEDUR_TY == 702 ~ 2,
+    TX_PROCEDUR_TY == 703 ~ 2
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  GRAFT_TYPE = factor(GRAFT_TYPE, labels= c("Whole", "Segmental"))
+)
+
+#CIT
+unosdata <- unosdata %>% mutate(
+  CIT = COLD_ISCH*60
+)
+
+#CMV status donor
+unosdata <- unosdata %>% mutate(
+  DCMV = case_when(
+    unosdata$CMV_DON == "P" ~ 1,
+    unosdata$CMV_DON == "N" ~ 0,
+    TRUE ~ NA_real_)) 
+
+unosdata <- unosdata %>% mutate(DCMV = 
+    factor(DCMV, labels = c("Negative", "Positive")))
+
+```
+
+**Recipient characteristics**
+```{r}
+#Gender
+unosdata <- unosdata %>% mutate(
+  RSEX = case_when(
+    GENDER == "M" ~ 1,
+    GENDER == "F" ~ 0
+  ) 
+)
+
+unosdata <- unosdata %>% mutate(
+  RSEX = factor(RSEX, labels = c("Female", "Male"))
+)
+
+#Ethnicity
+unosdata <- unosdata %>% mutate(
+  RETHNIC = case_when(
+    ETHCAT == 1 ~ 0,
+    ETHCAT == 2 ~ 1,
+    TRUE ~ 2,
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  RETHNIC = factor(RETHNIC, labels = c("White", "Black", "Other"))
+)
+  
+
+#Recipient BMI
+unosdata <- unosdata %>% rename(
+  BMI = BMI_CALC
+)
+
+#Waiting list
+unosdata <- unosdata %>% rename(
+  WAITLIST_TIME = DAYSWAIT_CHRON
+)
+
+#Transplant unit
+unosdata <- unosdata %>% rename(
+  TRANSPLANT_UNIT = CTR_CODE 
+)
+
+#Recipient MELD score
+unosdata <- unosdata %>% rename(
+  MELD = FINAL_MELD_PELD_LAB_SCORE
+)
+
+#Renal support
+unosdata$RREN_SUP <- 
+  recode(unosdata$FINAL_DIALYSIS_PRIOR_WEEK,
+                               c("Y"~1,
+                                 "N"~0
+                               ))
+
+unosdata <- unosdata %>% mutate(
+  RREN_SUP = factor(RREN_SUP, labels = c("No pre-tx support", "Pre-tx support"))
+)
+
+#Ventilatory support
+unosdata <- unosdata %>% mutate(
+  RVENT = ON_VENT_TRR  
+) %>%
+  mutate(
+    RVENT = factor(
+      RVENT, labels = 
+        c("Not ventilated", "Ventilated"
+          )))
+  
+#Previous abdominal surgery
+unosdata$RAB_SURGERY <- recode(unosdata$PREV_AB_SURG_TRR,
+                               c("Y" ~ 1,
+                                 "N" ~ 0,
+                                 "U" ~ NA))
+
+
+unosdata <- unosdata %>% mutate(
+  RAB_SURGERY = factor(RAB_SURGERY, labels = c("No", "Yes"))
+)
+
+#Functional status
+unosdata <- unosdata %>% mutate(
+  RLIFE = case_when(
+    FUNC_STAT_TRR == 2010 | FUNC_STAT_TRR == 2020 | FUNC_STAT_TRR == 2030 | FUNC_STAT_TRR == 2040 ~ 1,
+    FUNC_STAT_TRR == 2050 | FUNC_STAT_TRR == 2060 | FUNC_STAT_TRR == 2070 ~ 2,
+    FUNC_STAT_TRR == 2080 | FUNC_STAT_TRR == 2090 | FUNC_STAT_TRR == 2100 ~ 3
+  )
+) %>%
+  mutate(RLIFE = factor(RLIFE, labels = c("Low", "Intermediate", "High")))
+
+#Ascites
+unosdata <- unosdata %>% mutate(
+  RASCITES = case_when(
+    ASCITES_TX == 1 ~ 0,
+    ASCITES_TX == 2 | ASCITES_TX == 3 ~ 1,
+    ASCITES_TX == 4 ~ 0
+  )
+) %>%
+  mutate(RASCITES = factor(RASCITES, labels = c("No ascites", "Ascites")))
+
+#Encephalopathy
+unosdata <- unosdata %>% mutate(
+  RENCEPH = case_when(
+    ENCEPH_TX == 1 ~ 0,
+    ENCEPH_TX == 2 | ENCEPH_TX == 3 ~ 1,
+    ENCEPH_TX == 4 ~ 0
+  )
+) %>%
+  mutate(RENCEPH = factor(RENCEPH, labels = c("Not encephalopathic", "Encephalopathic")))
+
+#Recipient blood group
+unosdata <- unosdata %>% mutate(
+  RBG = case_when(
+    ABO == "O" ~ 1,
+    ABO == "A" ~ 2,
+    ABO == "A1" ~ 2,
+    ABO == "A2" ~ 2,
+    ABO == "B" ~ 3,
+    ABO == "A1B" ~ 4,
+    ABO == "A2B" ~ 4,
+    ABO == "AB" ~ 4
+  )
+) %>%
+  mutate(RBG = factor(RBG, labels = c("0", "A", "B", "AB")))
+
+#Recipient HCV status
+unosdata$RANTI_HCV <- recode(unosdata$HCV_SEROSTATUS,
+                             "N" ~ 0,
+                             "ND" ~ NA,
+                             "P" ~ 1,
+                             "U" ~ NA,
+                             TRUE ~ NA)
+
+unosdata <- unosdata %>%
+  mutate(RANTI_HCV = factor(RANTI_HCV, labels = c("Negative", "Positive")))
+
+#Albumin
+unosdata <- unosdata %>% rename(
+  RALBUMIN = ALBUMIN_TX
+)
+
+#INR
+unosdata <- unosdata %>% mutate(
+  RINR = FINAL_INR
+)
+
+#Bilirubin
+unosdata <- unosdata %>% rename(
+  RBILIRUBIN = TBILI_TX
+)
+
+#Creatinine
+unosdata <- unosdata %>% mutate(RCREAT = case_when(
+  RREN_SUP == "Pre-tx support" ~ 4,
+  TRUE ~ CREAT_TX 
+))
+
+unosdata <- unosdata %>% mutate(
+  COUNTRY = case_when(
+    PCENS >= 0 ~ "US"
+  )
+)
+
+#Disease Etiology
+#Freetext searches
+#pattern for HCC                
+pattern1 <- c("[hH][eE][pP][aA][tT][oO][cC][eE][lL][lL][uU][lL][aA][rR].[cC]|[hH][cC][cC]|[hH][eE][pP][aA][tT][oO][mM][aA]")
+
+unosdata <- unosdata %>% mutate(
+  HCCfreetext = case_when(
+    grepl("[hH][eE][pP][aA][tT][oO][cC][eE][lL][lL][uU][lL][aA][rR].[cC]|[hH][cC][cC]|[hH][eE][pP][aA][tT][oO][mM][aA]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  HCCfreetext2 = case_when(
+    grepl("[hH][eE][pP][aA][tT][oO][cC][eE][lL][lL][uU][lL][aA][rR].[cC]|[hH][cC][cC]|[hH][eE][pP][aA][tT][oO][mM][aA]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  HCCfreetext3 = case_when(
+    grepl("[hH][eE][pP][aA][tT][oO][cC][eE][lL][lL][uU][lL][aA][rR].[cC]|[hH][cC][cC]|[hH][eE][pP][aA][tT][oO][mM][aA]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#HCV freetext
+unosdata <- unosdata %>% mutate(
+  HCVfreetext = case_when(
+    grepl("[hH][cC][vV]|[hH][eE][pP][aA][tT][iI][sS].[cC]|[hH][eE][pP].[cC]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+  )
+
+unosdata <- unosdata %>% mutate(
+  HCVfreetext2 = case_when(
+    grepl("[hH][cC][vV]|[hH][eE][pP][aA][tT][iI][sS].[cC]|[hH][eE][pP].[cC]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+  )
+
+unosdata <- unosdata %>% mutate(
+  HCVfreetext3 = case_when(
+    grepl("[hH][cC][vV]|[hH][eE][pP][aA][tT][iI][sS].[cC]|[hH][eE][pP].[cC]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+  )
+
+
+#PSC freetext
+unosdata <- unosdata %>% mutate(
+  PSCfreetext = case_when(
+    grepl("[pP][sS][cC]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG].[cC][hH][oO][lL][aA][nN][gG][iI][tT][iI][sS]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  PSCfreetext2 = case_when(
+    grepl("[pP][sS][cC]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG].[cC][hH][oO][lL][aA][nN][gG][iI][tT][iI][sS]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  PSCfreetext3 = case_when(
+    grepl("[pP][sS][cC]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG].[cC][hH][oO][lL][aA][nN][gG][iI][tT][iI][sS]|[pP][rR][iI][mM][aA][rR][yY].[sS][cC][lL][eE][rR][oO][sS][iI][nN][gG]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#HBV freetext
+unosdata <- unosdata %>% mutate(
+  HBVfreetext = case_when(
+    grepl("[hH][bB][vV]|[hH][eE][pP][aA][tT][iI][tT][iI][sS].[bB]|[hH][eE][pP].[bB]|", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  HBVfreetext2 = case_when(
+    grepl("[hH][bB][vV]|[hH][eE][pP][aA][tT][iI][tT][iI][sS].[bB]|[hH][eE][pP].[bB]|", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  HBVfreetext3 = case_when(
+    grepl("[hH][bB][vV]|[hH][eE][pP][aA][tT][iI][tT][iI][sS].[bB]|[hH][eE][pP].[bB]|", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+#PBC freetext 
+unosdata <- unosdata %>% mutate(
+  PBCfreetext = case_when(
+    grepl("[pP][bB][cC]|[pP][rR][iI][mM][aA][rR][yY].[bB][iI][lL][iI][aA][rR][yY]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  PBCfreetext2 = case_when(
+    grepl("[pP][bB][cC]|[pP][rR][iI][mM][aA][rR][yY].[bB][iI][lL][iI][aA][rR][yY]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+unosdata <- unosdata %>% mutate(
+  PBCfreetext3 = case_when(
+    grepl("[pP][bB][cC]|[pP][rR][iI][mM][aA][rR][yY].[bB][iI][lL][iI][aA][rR][yY]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#ALD
+unosdata <-unosdata %>% mutate(
+  ALDfreetext= case_when(
+    grepl("[^aA][lL][dD][.]|[aA][lL][cC][oO][hH]|[aA][lL][cC][oO][hH][oO][lL][iI][cC]|[^aA][lL][cC][oO][hH][oO][lL][iI][cC].[lL][iI][vV][eE][rR].[dD][iI][sS][eE][aA][sS][eE]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  ALDfreetext2= case_when(
+    grepl("[^aA][lL][dD][.]|[aA][lL][cC][oO][hH]|[aA][lL][cC][oO][hH][oO][lL][iI][cC]|[^aA][lL][cC][oO][hH][oO][lL][iI][cC].[lL][iI][vV][eE][rR].[dD][iI][sS][eE][aA][sS][eE]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  ALDfreetext3= case_when(
+    grepl("[^aA][lL][dD][.]|[aA][lL][cC][oO][hH]|[aA][lL][cC][oO][hH][oO][lL][iI][cC]|[^aA][lL][cC][oO][hH][oO][lL][iI][cC].[lL][iI][vV][eE][rR].[dD][iI][sS][eE][aA][sS][eE]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#AID
+unosdata <-unosdata %>% mutate(
+  AIDfreetext= case_when(
+    grepl("[aA][iI][hH]|[aA][uU][tT][oO][iI][mM][mM][uU][nN][eE]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  AIDfreetext2= case_when(
+    grepl("[aA][iI][hH]|[aA][uU][tT][oO][iI][mM][mM][uU][nN][eE]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  AIDfreetext3= case_when(
+    grepl("[aA][iI][hH]|[aA][uU][tT][oO][iI][mM][mM][uU][nN][eE]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#NASH
+unosdata <-unosdata %>% mutate(
+  NASHfreetext= case_when(
+    grepl("[nN][aA][sS][hH]|[nN][oO][nN][.][aA][lL][cC]|[nN][oO][nN][-][aA][lL][cC][oO][hH][oO][lL][iI][cC]|[fF][aA][tT]|[nN][aA][fF][lL][dD]|[nN][oO][nN].[aA][lL][cC][oO][lL][iI][cC].[sS]|[sS][tT][eE][aA][tT]", DIAG_OSTXT) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  NASHfreetext2= case_when(
+    grepl("[nN][aA][sS][hH]|[nN][oO][nN][.][aA][lL][cC]|[nN][oO][nN][-][aA][lL][cC][oO][hH][oO][lL][iI][cC]|[fF][aA][tT]|[nN][aA][fF][lL][dD]|[nN][oO][nN].[aA][lL][cC][oO][lL][iI][cC].[sS]|[sS][tT][eE][aA][tT]", DGN_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <-unosdata %>% mutate(
+  NASHfreetext3= case_when(
+    grepl("[nN][aA][sS][hH]|[nN][oO][nN][.][aA][lL][cC]|[nN][oO][nN][-][aA][lL][cC][oO][hH][oO][lL][iI][cC]|[fF][aA][tT]|[nN][aA][fF][lL][dD]|[nN][oO][nN].[aA][lL][cC][oO][lL][iI][cC].[sS]|[sS][tT][eE][aA][tT]", DGN2_OSTXT_TCR) == TRUE ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#NASH
+unosdata <- unosdata %>% mutate(
+  NASH = case_when(
+    NASHfreetext == 1 ~ 1,
+    DIAG == 4214 ~ 1,
+    DGN_TCR == 4214 ~ 1,
+    DGN2_TCR == 4214 ~ 1,
+    NASHfreetext2 == 1 ~ 1,
+    NASHfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+#Disease etiology
+#HCC
+unosdata <- unosdata %>% mutate(
+  HCC = case_when(
+    DIAG == 4400 ~ 1,
+    DIAG == 4401 ~ 1,
+    DGN_TCR == 4400 ~ 1,
+    DGN_TCR == 4401 ~ 1,
+    DGN2_TCR == 4400 ~ 1,
+    DGN2_TCR == 4401 ~ 1,
+    HCCfreetext == 1 ~ 1,
+    HCCfreetext2 == 1 ~1,
+    HCCfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#ALF
+unosdata <- unosdata %>% mutate(
+  ALF = case_when(
+    DIAG == 4110 ~ 1,
+    DIAG == 4101 ~ 1,
+    DIAG == 4102 ~ 1,
+    DIAG == 4103 ~ 1,
+    DIAG == 4104 ~ 1,
+    DIAG == 4105 ~ 1,
+    DIAG == 4106 ~ 1,
+    DIAG == 4107 ~ 1,
+    DIAG == 4108 ~ 1,
+    DIAG == 4100 ~ 1,
+    DIAG == 4520 ~ 1,
+    DGN_TCR == 4110 ~ 1,
+    DGN_TCR == 4101 ~ 1,
+    DGN_TCR == 4102 ~ 1,
+    DGN_TCR == 4103 ~ 1,
+    DGN_TCR == 4104 ~ 1,
+    DGN_TCR == 4105 ~ 1,
+    DGN_TCR == 4106 ~ 1,
+    DGN_TCR == 4107 ~ 1,
+    DGN_TCR == 4108 ~ 1,
+    DGN_TCR == 4100 ~ 1,
+    DGN_TCR == 4520 ~ 1,
+    DGN2_TCR == 4110 ~ 1,
+    DGN2_TCR == 4101 ~ 1,
+    DGN2_TCR == 4102 ~ 1,
+    DGN2_TCR == 4103 ~ 1,
+    DGN2_TCR == 4104 ~ 1,
+    DGN2_TCR == 4105 ~ 1,
+    DGN2_TCR == 4106 ~ 1,
+    DGN2_TCR == 4107 ~ 1,
+    DGN2_TCR == 4108 ~ 1,
+    DGN2_TCR == 4100 ~ 1,
+    DGN2_TCR == 4520 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+
+#HCV
+unosdata <- unosdata %>% mutate(
+  HCV = case_when(
+    DIAG == 4202 ~ 1,
+    DIAG == 4206 ~ 1,
+    DIAG == 4216 ~ 1,
+    DGN_TCR == 4202 ~ 1,
+    DGN_TCR == 4206 ~ 1,
+    DGN_TCR == 4216 ~ 1,
+    DGN2_TCR == 4202 ~ 1,
+    DGN2_TCR == 4206 ~ 1,
+    DGN2_TCR == 4216 ~ 1,
+    HCVfreetext == 1 ~ 1,
+    HCVfreetext2 == 1 ~ 1,
+    HCVfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#PSC
+unosdata <- unosdata %>% mutate(
+  PSC = case_when(
+    DIAG == 4240 ~ 1,
+    DIAG == 4241 ~ 1,
+    DIAG == 4242 ~ 1,
+    DIAG == 4245 ~ 1,
+    DGN_TCR == 4240 ~ 1,
+    DGN_TCR == 4241 ~ 1,
+    DGN_TCR == 4242 ~ 1,
+    DGN_TCR == 4245 ~ 1,
+    DGN2_TCR == 4240 ~ 1,
+    DGN2_TCR == 4241 ~ 1,
+    DGN2_TCR == 4242 ~ 1,
+    DGN2_TCR == 4245 ~ 1,
+    PSCfreetext == 1 ~ 1,
+    PSCfreetext2 == 1 ~ 1,
+    PSCfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+#HBV
+unosdata <- unosdata %>% mutate(
+  HBV = case_when(
+    DIAG == 4202 ~ 1,
+    DIAG == 4207 ~ 1,
+    DIAG == 4205 ~ 1,
+    DGN_TCR == 4202 ~ 1,
+    DGN_TCR == 4207 ~ 1,
+    DGN_TCR == 4205 ~ 1,
+    DGN2_TCR == 4202 ~ 1,
+    DGN2_TCR == 4207 ~ 1,
+    DGN2_TCR == 4205 ~ 1,
+    HBVfreetext == 1 ~ 1,
+    HBVfreetext2 == 1 ~ 1,
+    HBVfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#PBC
+unosdata <- unosdata %>% mutate(
+  PBC = case_when(
+    DIAG == 4220 ~ 1,
+    DGN_TCR == 4220 ~ 1,
+    DGN2_TCR == 4220 ~ 1,
+    PBCfreetext == 1 ~ 1,
+    PBCfreetext2 == 1 ~ 1,
+    PBCfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#Alcoholic
+unosdata <- unosdata %>% mutate(
+  ALD = case_when(
+    DIAG == 4215 ~ 1,
+    DIAG == 4217 ~ 1,
+    DGN_TCR == 4215 ~ 1,
+    DGN_TCR == 4217 ~ 1,
+    DGN2_TCR == 4215 ~ 1,
+    DGN2_TCR == 4217 ~ 1,
+    ALDfreetext == 1 ~ 1,
+    ALDfreetext2 == 1 ~ 1,
+    ALDfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+
+#Autoimmune and cryptogenic
+unosdata <- unosdata %>% mutate(
+  AID = case_when(
+    DIAG == 4212 ~ 1,
+    DIAG == 4213 ~ 1,
+    DIAG == 4200 ~ 1,
+    DIAG == 4209 ~ 1,
+    DIAG == 4203 ~ 1,
+    DIAG == 4208 ~ 1,
+    DIAG == 4210 ~ 1,
+    DGN_TCR == 4212 ~ 1,
+    DGN_TCR == 4213 ~ 1,
+    DGN_TCR == 4200 ~ 1,
+    DGN_TCR == 4209 ~ 1,
+    DGN_TCR == 4203 ~ 1,
+    DGN_TCR == 4208 ~ 1,
+    DGN_TCR == 4210 ~ 1,
+    DGN2_TCR == 4212 ~ 1,
+    DGN2_TCR == 4213 ~ 1,
+    DGN2_TCR == 4200 ~ 1,
+    DGN2_TCR == 4209 ~ 1,
+    DGN2_TCR == 4203 ~ 1,
+    DGN2_TCR == 4208 ~ 1,
+    DGN2_TCR == 4210 ~ 1,
+    AIDfreetext == 1 ~ 1,
+    AIDfreetext2 == 1 ~ 1,
+    AIDfreetext3 == 1 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+
+
+#Metabolic liver disease
+unosdata <- unosdata %>% mutate(
+  MET = case_when(
+    DIAG == 4300 ~ 1,
+    DIAG == 4301 ~ 1,
+    DIAG == 4302 ~ 1,
+    DIAG == 4303 ~ 1,
+    DIAG == 4304 ~ 1,
+    DIAG == 4305 ~ 1,
+    DIAG == 4306 ~ 1,
+    DIAG == 4307 ~ 1,
+    DIAG == 4308 ~ 1,
+    DIAG == 4315 ~ 1,
+    DIAG == 4214 ~ 1,
+    DGN_TCR == 4300 ~ 1,
+    DGN_TCR == 4301 ~ 1,
+    DGN_TCR == 4302 ~ 1,
+    DGN_TCR == 4303 ~ 1,
+    DGN_TCR == 4304 ~ 1,
+    DGN_TCR == 4305 ~ 1,
+    DGN_TCR == 4306 ~ 1,
+    DGN_TCR == 4307 ~ 1,
+    DGN_TCR == 4308 ~ 1,
+    DGN_TCR == 4315 ~ 1,
+    DGN_TCR == 4214 ~ 1,
+    DGN2_TCR == 4300 ~ 1,
+    DGN2_TCR == 4301 ~ 1,
+    DGN2_TCR == 4302 ~ 1,
+    DGN2_TCR == 4303 ~ 1,
+    DGN2_TCR == 4304 ~ 1,
+    DGN2_TCR == 4305 ~ 1,
+    DGN2_TCR == 4306 ~ 1,
+    DGN2_TCR == 4307 ~ 1,
+    DGN2_TCR == 4308 ~ 1,
+    DGN2_TCR == 4315 ~ 1,
+    DGN2_TCR == 4214 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+#Other 
+unosdata <- unosdata %>% mutate(
+  OTH = case_when(
+    DIAG == 4201 ~ 1,
+    DIAG == 4230 ~ 1,
+    DIAG == 4231 ~ 1,
+    DIAG == 4235 ~ 1,
+    DIAG == 4250 ~ 1,
+    DIAG == 4255 ~ 1,
+    DIAG == 4260 ~ 1,
+    DIAG == 4265 ~ 1,
+    DIAG == 4270 ~ 1,
+    DIAG == 4271 ~ 1,
+    DIAG == 4272 ~ 1,
+    DIAG == 4275 ~ 1,
+    DIAG == 4280 ~ 1,
+    DIAG == 4285 ~ 1,
+    DIAG == 4290 ~ 1,
+    DIAG == 4450 ~ 1,
+    DIAG == 4451 ~ 1,
+    DIAG == 4455 ~ 1,
+    DIAG == 4510 ~ 1,
+    DIAG == 4500 ~ 1,
+    DIAG == 4598 ~ 1,
+    DIAG == 999 ~ 1,
+    TRUE ~ 0
+  )
+)
+
+unosdata <- unosdata %>% mutate(
+  UKT_PLDGRP = case_when(
+    HCC == 1 | HCCfreetext == 1 ~ 1,
+    ALF == 1 ~ 2,
+    HCV == 1 | HCVfreetext == 1 & HCCfreetext == 0 ~ 3,
+    PSC == 1 | PSCfreetext == 1 ~ 4,
+    HBV == 1 | HBVfreetext == 1 ~ 5,
+    PBC == 1 | PBCfreetext == 1 ~ 6,
+    ALD == 1 | ALDfreetext == 1~ 7,
+    AID == 1 | AIDfreetext == 1 ~ 8,
+    MET == 1 | NASHfreetext == 1 ~ 9,
+    OTH == 1 ~ 10
+  )
+) %>%
+  mutate(UKT_PLDGRP = factor(UKT_PLDGRP, labels = c("HCC", "ALF", "HCV", "PSC", "HBV", "PBC", "ALD", "AID", "Metabolic", "Others")))
+
+#Combined HCC
+unosdata <- unosdata %>% mutate(
+  HCC_combined = case_when(
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4202 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4206 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4216 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4202 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4206 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4216 ~ 1,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4240 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4241 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4242 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4245 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4240 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4241 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4242 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4245 ~ 2,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4207 ~ 3,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4205 ~ 3,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4207 ~ 3,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4205 ~ 3,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4220 ~ 4,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4220 ~ 4,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4215 ~ 5,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4217 ~ 5,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4215 ~ 5,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4217 ~ 5,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4212 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4213 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4200 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4209 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4203 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4208 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4210 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4212 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4213 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4200 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4209 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4203 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4208 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4210 ~ 6,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4300 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4301 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4302 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4303 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4304 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4305 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4306 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4307 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4308 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4315 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4314 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4300 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4301 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4302 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4303 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4304 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4305 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4306 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4307 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4308 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4315 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4314 ~ 7,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4201 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4230 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4231 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4235 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4250 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4255 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4260 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4265 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4270 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4271 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4272 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4275 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4280 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4285 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4290 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4450 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4451 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4455 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4510 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4500 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 4598 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN_TCR == 999 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4201 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4230 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4231 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4235 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4250 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4255 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4260 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4265 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4270 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4271 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4272 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4275 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4280 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4285 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4290 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4450 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4451 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4455 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4510 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4500 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 4598 ~ 8,
+    unosdata$HCC == 1 & unosdata$DGN2_TCR == 999 ~ 8,
+    TRUE ~ 8)) 
+
+unosdata <- unosdata %>% mutate(
+  HCC_combined = factor(HCC_combined, labels = c("HCV-associated", "PSC-associated", "HBV-associated", "PBC-associated", "ALD-associated", "AID-associated", "MET-associated", "Other"))
+)
+```
+
+**Causes of death**
+```{r}
+unosdata <- unosdata %>% mutate(
+  COD_cardiovascular = case_when(
+    COD == 4620 ~ 1,
+    COD2 == 4620 ~ 1,
+    COD3 == 4620 ~ 1,
+    COD == 4622 ~ 1,
+    COD2 == 4622 ~ 1,
+    COD3 == 4622 ~ 1,
+    COD == 4623 ~ 1,
+    COD2 == 4623 ~ 1,
+    COD3 == 4623 ~ 1,
+    COD == 4624 ~ 1,
+    COD2 == 4624 ~ 1,
+    COD3 == 4624 ~ 1,
+    COD == 4625 ~ 1,
+    COD2 == 4625 ~ 1,
+    COD3 == 4625 ~ 1,
+    COD == 4626 ~ 1,
+    COD2 == 4626 ~ 1,
+    COD3 == 4626 ~ 1,
+    COD == 4246 ~ 1,
+    COD2 == 4246 ~ 1,
+    COD3 == 4246 ~ 1,
+    COD == 4247 ~ 1,
+    COD2 == 4247 ~ 1,
+    COD3 == 4247 ~ 1,
+    COD == 4621 ~ 1,
+    COD2 == 4621 ~ 1,
+    COD3 == 4621 ~ 1,
+    COD == 4630 ~ 1,
+    COD2 == 4630 ~ 1,
+    COD3 == 4630 ~ 1,
+    COD == 4631 ~ 1,
+    COD2 == 4631 ~ 1,
+    COD3 == 4631 ~ 1,
+    COD == 4701 ~ 1,
+    COD2 == 4701 ~ 1,
+    COD3 == 4701 ~ 1,
+    COD == 4635 ~ 1,
+    COD2 == 4635 ~ 1,
+    COD3 == 4635 ~ 1,
+    COD == 4700 ~ 1,
+    COD2 == 4700 ~ 1,
+    COD3 == 4700 ~ 1,
+    COD == 4702 ~ 1,
+    COD2 == 4702 ~ 1,
+    COD3 == 4702 ~ 1,
+    COD == 4703 ~ 1,
+    COD2 == 4703 ~ 1,
+    COD3 == 4703 ~ 1,
+    COD == 4705 ~ 1,
+    COD2 == 4705 ~ 1,
+    COD3 == 4705 ~ 1,
+    COD == 4706 ~ 1,
+    COD2 == 4706 ~ 1,
+    COD3 == 4706 ~ 1,
+    TRUE ~ 0))
+
+unosdata <- unosdata %>% mutate(COD_cardiovascular = factor(COD_cardiovascular, labels = c("Cardiovascular COD", "Noncardiovascular COD")))
+
+unosdata <- unosdata %>% mutate(
+  COD_malignancy = case_when(
+    COD == 4850 ~ 1,
+    COD2 == 4850 ~ 1,
+    COD3 == 4850 ~ 1,
+    COD == 4851 ~ 1,
+    COD2 == 4851 ~ 1,
+    COD3 == 4851 ~ 1,
+    COD == 4855 ~ 1,
+    COD2 == 4855 ~ 1,
+    COD3 == 4855 ~ 1,
+    COD == 4856 ~ 1,
+    COD2 == 4856 ~ 1,
+    COD3 == 4856 ~ 1,
+    COD == 4860 ~ 1,
+    COD2 == 4860 ~ 1,
+    COD3 == 4860 ~ 1,
+    COD == 4951 ~ 1,
+    COD2 == 4951 ~ 1,
+    COD3 == 4951 ~ 1,
+    COD == 4952 ~ 1,
+    COD2 == 4952 ~ 1,
+    COD3 == 4952 ~ 1,
+    COD == 4953 ~ 1,
+    COD2 == 4953 ~ 1,
+    COD3 == 4953 ~ 1,
+    TRUE ~ 0))
+
+unosdata <- unosdata %>% mutate(COD_malignancy = factor(COD_malignancy, labels = c("Malignancy-related COD", "Nonmalignancy-related COD")))
+
+unosdata <- unosdata %>% mutate(
+  COD_infection = case_when(
+    COD == 4800 ~ 1,
+    COD2 == 4800 ~ 1,
+    COD3 == 4800 ~ 1,
+    COD == 4801 ~ 1,
+    COD2 == 4801 ~ 1,
+    COD3 == 4801 ~ 1,
+    COD == 4802 ~ 1,
+    COD2 == 4802 ~ 1,
+    COD3 == 4802 ~ 1,
+    COD == 4803 ~ 1,
+    COD2 == 4803 ~ 1,
+    COD3 == 4803 ~ 1,
+    COD == 4804 ~ 1,
+    COD2 == 4804 ~ 1,
+    COD3 == 4804 ~ 1,
+    COD == 4805 ~ 1,
+    COD2 == 4805 ~ 1,
+    COD3 == 4805 ~ 1,
+    COD == 4950 ~ 1,
+    COD2 == 4950 ~ 1,
+    COD3 == 4950 ~ 1,
+    COD == 4806 ~ 1,
+    COD2 == 4806 ~ 1,
+    COD3 == 4806 ~ 1,
+    COD == 4810 ~ 1,
+    COD2 == 4810 ~ 1,
+    COD3 == 4810 ~ 1,
+    COD == 4811 ~ 1,
+    COD2 == 4811 ~ 1,
+    COD3 == 4811 ~ 1,
+    TRUE ~ 0))
+
+unosdata <- unosdata %>% mutate(COD_infection = factor(COD_infection, labels = c("Infection COD", "Noninfection COD")))
+
+unosdata <- unosdata %>% mutate(
+  COD_liverrelated = case_when(
+    COD == 4600 ~ 1,
+    COD2 == 4600 ~ 1,
+    COD3 == 4600 ~ 1,
+    COD == 4955 ~ 1,
+    COD2 == 4955 ~ 1,
+    COD3 == 4955 ~ 1,
+    COD == 4601 ~ 1,
+    COD2 == 4601 ~ 1,
+    COD3 == 4601 ~ 1,
+    COD == 4602 ~ 1,
+    COD2 == 4602 ~ 1,
+    COD3 == 4602 ~ 1,
+    COD == 4603 ~ 1,
+    COD2 == 4603 ~ 1,
+    COD3 == 4603 ~ 1,
+    COD == 4604 ~ 1,
+    COD2 == 4604 ~ 1,
+    COD3 == 4604 ~ 1,
+    COD == 4605 ~ 1,
+    COD2 == 4605 ~ 1,
+    COD3 == 4605 ~ 1,
+    COD == 4606 ~ 1,
+    COD2 == 4606 ~ 1,
+    COD3 == 4606 ~ 1,
+    COD == 4610 ~ 1,
+    COD2 == 4610 ~ 1,
+    COD3 == 4610 ~ 1,
+    COD == 4615 ~ 1,
+    COD2 == 4615 ~ 1,
+    COD3 == 4615 ~ 1,
+    COD == 4956 ~ 1,
+    COD2 == 4956 ~ 1,
+    COD3 == 4956 ~ 1,
+    COD == 4957 ~ 1,
+    COD2 == 4957 ~ 1,
+    COD3 == 4957 ~ 1,
+    COD == 4958 ~ 1,
+    COD2 == 4958 ~ 1,
+    COD3 == 4958 ~ 1,
+    TRUE ~ 0))
+
+unosdata <- unosdata %>% mutate(COD_liverrelated = factor(COD_liverrelated, labels = c("Liver disease or graft failure COD", "Nonliverdisease or graft failure COD")))
+
+unosdata <- unosdata %>% mutate(
+  COD_other = case_when(
+    COD == 4945 ~ 1,
+    COD2 == 4945 ~ 1,
+    COD3 == 4945 ~ 1,
+    COD == 4650 ~ 1,
+    COD2 == 4650 ~ 1,
+    COD3 == 4650 ~ 1,
+    COD == 4940 ~ 1,
+    COD2 == 4940 ~ 1,
+    COD3 == 4940 ~ 1,
+    COD == 4941 ~ 1,
+    COD2 == 4941 ~ 1,
+    COD3 == 4941 ~ 1,
+    COD == 4942 ~ 1,
+    COD2 == 4942 ~ 1,
+    COD3 == 4942 ~ 1,
+    COD == 4640 ~ 1,
+    COD2 == 4640 ~ 1,
+    COD3 == 4640 ~ 1,
+    COD == 4645 ~ 1,
+    COD2 == 4645 ~ 1,
+    COD3 == 4645 ~ 1,
+    COD == 4910 ~ 1,
+    COD2 == 4910 ~ 1,
+    COD3 == 4910 ~ 1,
+    COD == 4660 ~ 1,
+    COD2 == 4660 ~ 1,
+    COD3 == 4660 ~ 1,
+    COD == 998 ~ 1,
+    COD2 == 998 ~ 1,
+    COD3 == 998 ~ 1,
+    COD == 999 ~ 1,
+    COD2 == 999 ~ 1,
+    COD3 == 999 ~ 1,
+    COD == 4900 ~ 1,
+    COD2 == 4900 ~ 1,
+    COD3 == 4900 ~ 1,
+    COD == 4920 ~ 1,
+    COD2 == 4920 ~ 1,
+    COD3 == 4920 ~ 1,
+    COD == 4930 ~ 1,
+    COD2 == 4930 ~ 1,
+    COD3 == 4930 ~ 1,
+    COD == 4935 ~ 1,
+    COD2 == 4935 ~ 1,
+    COD3 == 4935 ~ 1,
+    TRUE ~ 0))
+
+unosdata <- unosdata %>% mutate(COD_other = factor(COD_other, labels = c("Other COD", "Non-Other (previously categorized) COD")))
+```
+
+**UNOS exception data file**
+**Read in data**
+```{r}
+liverexception <- read_csv("/Users/Ivanics/Desktop/liverexception.csv", guess_max = 300000)
+liverexception$ORIG_APPL_DATE <- mdy(liverexception$ORIG_APPL_DATE)
+
+#Find most recent application date
+liverexception <- liverexception %>% 
+  group_by(WL_ID_CODE) %>%
+  slice(which.max(ORIG_APPL_DATE)) %>% ungroup()
+```
+
+**Recoding**
+```{r}
+#MAX tumour size
+liverexception <- liverexception %>%
+  mutate(MAX_TUMOR = case_when(
+    TUMOR_SIZE1 <= 3 ~ 1,
+    TUMOR_SIZE2 <= 3 ~ 1,
+    TUMOR_SIZE3 <= 3 ~ 1,
+    TUMOR_SIZE4 <= 3 ~ 1,
+    TUMOR_SIZE5 <= 3 ~ 1,
+    TUMOR_SIZE1 > 3 ~2,
+    TUMOR_SIZE2 > 3 ~2,
+    TUMOR_SIZE3 > 3 ~2,
+    TUMOR_SIZE4 > 3 ~2,
+    TUMOR_SIZE5 > 3 ~2
+), na.rm= TRUE)
+
+liverexception$MAX_TUMOR <- factor(liverexception$MAX_TUMOR, labels = c("<3cm", ">3cm"))
+
+
+#Total tumour diameter
+liverexception$TOTAL_DIAMETER <- rowSums(liverexception[,c("TUMOR_SIZE1", "TUMOR_SIZE2", "TUMOR_SIZE3", "TUMOR_SIZE4", "TUMOR_SIZE5")], na.rm=TRUE)
+
+liverexception$TOTAL_DIAMETER <- recode(liverexception$TOTAL_DIAMETER,
+                                lo %thru% 5 ~ 1,
+                                5.00001 %thru% hi ~ 2)
+
+liverexception$TOTAL_DIAMETER <- factor(liverexception$TOTAL_DIAMETER, labels = c("<5cm", ">5cm"))
+
+#Number of tumors
+#subset only patients with tumors
+liverexception <- liverexception %>% filter(
+  TUMORNUM > 0
+)
+
+#Tumour number
+liverexception$TUMOR_NUMBER <- recode(liverexception$TUMORNUM,
+                          1~1,
+                          2~2,
+                          3~2,
+                          4~2,
+                          5~2,
+                          6~2,
+                          7~2,
+                          8~2,
+                          9~2,
+                          TRUE~NA
+                        ) 
+
+liverexception$TUMOR_NUMBER <- factor(liverexception$TUMOR_NUMBER, labels = c("Single", "Multiple"))
+
+#AFP ????
+liverexception$STRAT_AFP <- recode(liverexception$AFP,
+                           0 %thru% 20 ~ 1,
+                           21 %thru% 400 ~ 2,
+                           400.001 %thru% hi ~ 3
+                           )
+
+liverexception$STRAT_AFP <- factor(liverexception$STRAT_AFP, labels = c("AFP 0-20", "AFP 21-400", "AFP >400"))
+
+#MILAN
+liverexception <- liverexception %>% 
+  mutate(EXTENDED = case_when(
+    TUMORNUM == 3 & TUMOR_SIZE1 > 3 ~ 1,
+    TUMORNUM == 3 & TUMOR_SIZE2 > 3 ~ 1,
+    TUMORNUM == 3 & TUMOR_SIZE3 > 3 ~ 1,
+    TUMORNUM == 3 & TUMOR_SIZE4 > 3 ~ 1,
+    TUMORNUM == 3 & TUMOR_SIZE5 > 3 ~ 1,
+    TUMORNUM == 2 & TUMOR_SIZE1 > 3 ~ 1,
+    TUMORNUM == 2 & TUMOR_SIZE2 > 3 ~ 1
+  ))
+
+liverexception <- liverexception %>%
+  mutate(MILAN = case_when(
+    TUMOR_SIZE1 > 5 ~ 1,
+    TUMOR_SIZE2 > 5 ~ 1,
+    TUMOR_SIZE3 > 5 ~ 1,
+    TUMOR_SIZE4 > 5 ~ 1,
+    TUMOR_SIZE5 > 5 ~ 1,
+    TUMOR_SIZE4 >= 0.1 | TUMOR_SIZE5 >= 0.1 ~ 1,
+    TUMORNUM >= 4 ~ 1,
+    EXTENDED == 1 ~ 1,
+    TRUE ~ 0
+   ))
+
+liverexception$MILAN <- factor(liverexception$MILAN, labels = c("Milan", "Extended"))
+
+#AJCC
+liverexception <- liverexception %>% mutate(
+  AJCC = case_when(
+    TUMORNUM == 1 & TUMOR_SIZE1 <= 2 ~ 1,
+    TUMORNUM == 1 & TUMOR_SIZE1 >= 2.1 ~ 2,
+    TUMORNUM == 1 & TUMOR_SIZE1 >= 2.1 ~ 2,
+    TUMORNUM == 2 & TUMOR_SIZE1 == 2.4 ~ 2,
+    TUMORNUM == 1 & TUMOR_SIZE1 >= 2.1 ~ 3,
+    TUMOR_SIZE2 <= 5 ~ 3,
+    TUMOR_SIZE3 <= 5 ~ 3,
+    TUMOR_SIZE4 <= 5 ~ 3,
+    TUMOR_SIZE5 <= 5 ~ 3,
+    TUMORNUM > 1 & TUMOR_SIZE1 > 5 ~ 4,
+    TUMORNUM > 1 & TUMOR_SIZE2 > 5 ~ 4,
+    TUMORNUM > 1 & TUMOR_SIZE3 > 5 ~ 4,
+    TUMORNUM > 1 & TUMOR_SIZE4 > 5 ~ 4,
+    TUMORNUM > 1 & TUMOR_SIZE5 > 5 ~ 4
+  )
+)
+
+liverexception$AJCC <- factor(liverexception$AJCC, labels = c("T1A", "T1B", "T2", "T3"))
+```
+

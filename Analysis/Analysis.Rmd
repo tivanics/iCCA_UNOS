@@ -1,0 +1,1966 @@
+---
+title: "HCC: US vs. UK"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 10, fig.height = 12, results="asis")
+```
+
+```{r}
+library(ggplot2)
+library(survminer)
+library(survival)
+library(dplyr)
+library(tidyverse)
+#library(data.table) 
+library(forestmodel) 
+#library(Hmisc) 
+library(sjPlot) 
+library(stargazer) 
+library(sjmisc) 
+library(arsenal) 
+library(gtsummary)
+library(expss) 
+library(lubridate)
+library(ggsignif)
+library(ggsci)
+library(Greg) #to use timesplitter
+library(magrittr)
+options(scipen=999)
+```
+
+**Read in data**
+```{r}
+#bound2 <- read_csv("/Users/Ivanics/Desktop/bound3.csv", guess_max = 300000)
+#with uhn
+bound2 <- read_csv("/Users/Ivanics/Desktop/bound4.csv", guess_max = 300000)
+```
+
+**Variable coding**
+```{r}
+bound2 <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UK" | COUNTRY == "UHN" | COUNTRY == "CAN")
+
+bound2 <- bound2 %>% filter(TX_YR <= 2018)
+
+bound2 <- bound2 %>%
+  mutate(PSURV_years = PSURV/365.25) %>%
+  mutate(GSURV_years = GSURV/365.25)
+
+bound2$MILAN <- factor(bound2$MILAN, ordered = FALSE)
+bound2$MILAN <- relevel(bound2$MILAN, ref="Milan")
+bound2$TUMOR_NUMBER <- factor(bound2$TUMOR_NUMBER, ordered = FALSE)
+bound2$TUMOR_NUMBER <- relevel(bound2$TUMOR_NUMBER, ref="Single")
+bound2$STRAT_AFP <- factor(bound2$STRAT_AFP, ordered = FALSE)
+bound2$STRAT_AFP <- factor(bound2$STRAT_AFP, levels = c("AFP 0-20", "AFP 21-400", "AFP >400"))
+bound2$STRAT_AFP <- relevel(bound2$STRAT_AFP, ref="AFP 0-20")
+bound2$COUNTRY <- factor(bound2$COUNTRY, ordered = FALSE)
+bound2$COUNTRY <- relevel(bound2$COUNTRY, ref="US")
+bound2$RVENT <- factor(bound2$RVENT, ordered = FALSE)
+bound2$RVENT <- relevel(bound2$RVENT, ref = "Not ventilated")
+bound2$RETHNIC <- factor(bound2$RETHNIC, ordered = FALSE)
+bound2$RETHNIC <- relevel(bound2$RETHNIC, ref = "White")
+bound2$HCC_combined <- factor(bound2$HCC_combined, ordered = FALSE)
+bound2$HCC_combined <- relevel(bound2$HCC_combined, ref = "Other")
+bound2$DCMV <- factor(bound2$DCMV, ordered = FALSE)
+bound2$DCMV <- relevel(bound2$DCMV, ref = "Negative")
+bound2$DONCOD <- factor(bound2$DONCOD, ordered = FALSE)
+bound2$DONCOD <- relevel(bound2$DONCOD, ref = "Cerebral Anoxia")
+bound2$NASH <- factor(bound2$NASH)
+bound2$OTH <- factor(bound2$OTH)
+bound2$ALF <- factor(bound2$ALF)
+bound2$ALD <- factor(bound2$ALD)
+bound2$HCV <- factor(bound2$HCV)
+bound2$HBV <- factor(bound2$HBV)
+bound2$PSC <- factor(bound2$PSC)
+bound2$PBC <- factor(bound2$PBC)
+bound2$AID <- factor(bound2$AID)
+bound2$MET <- factor(bound2$MET)
+
+bound2 <- bound2 %>% mutate(DBMI = case_when(
+  DBMI < 10 ~ NA_real_,
+  DBMI > 100 ~ NA_real_,
+  TRUE ~ DBMI
+))
+
+bound2 <- bound2 %>% mutate(BMI = case_when(
+  BMI < 10 ~ NA_real_,
+  BMI > 100 ~ NA_real_,
+  TRUE ~ BMI
+))
+
+bound2 <- bound2 %>% mutate(CIT = case_when(
+  CIT > 2400 ~ NA_real_,
+  TRUE ~ CIT
+))
+
+bound2 <- bound2 %>% mutate(RCREAT = case_when(
+  RCREAT < 0.1 ~ NA_real_,
+  RCREAT > 15 ~ NA_real_,
+  TRUE ~ RCREAT
+))
+
+bound2 <- bound2 %>% mutate(RALBUMIN = case_when(
+  RALBUMIN < 0.7 ~ NA_real_,
+  RALBUMIN > 6 ~ NA_real_,
+  TRUE ~ RALBUMIN
+))
+
+bound2 <- bound2 %>% mutate(MELD_calculated = 3.78*log(RBILIRUBIN) + 11.2*log(RINR) + 9.57*log(RCREAT) + 6.43)
+```
+
+**Recoding graft survival**
+```{r}
+bound2 <- bound2 %>% mutate(
+  GCENSnew = case_when(
+    PCENS == 1 & PSURV_years <= GSURV_years ~ 1,
+    TRUE ~ 0
+  )
+)
+
+bound2 <- bound2 %>% mutate(
+  GSURV_yearsnew = case_when(
+    PCENS == 1 & PSURV_years <= GSURV_years ~ PSURV_years,
+    TRUE ~ GSURV_years
+  )
+)
+```
+
+**Recoding patient survival**
+```{r}
+#90day PSURV
+bound2 <- bound2 %>% mutate(PSURV_90day =
+    case_when(
+      PSURV >= 90.000001 ~ 90,
+      PSURV <= 90 ~ PSURV
+    ))
+
+#1-year PCENS
+bound2 <- bound2 %>% mutate(PCENS_90day =
+                              case_when(
+                                PSURV <= 90 ~ PCENS,
+                                PSURV > 90 ~ 0
+                              ))
+
+
+#1year PSURV
+bound2 <- bound2 %>% mutate(PSURV_1year =
+    case_when(
+      PSURV_years >= 1.0000001 ~ 1,
+      PSURV_years <= 1 ~ PSURV_years
+    ))
+
+#1-year PCENS
+bound2 <- bound2 %>% mutate(PCENS_1year =
+                              case_when(
+                                PSURV_years <= 1 ~ PCENS,
+                                PSURV_years > 1 ~ 0
+                              ))
+
+#3year PSURV
+bound2 <- bound2 %>% mutate(PSURV_3year =
+    case_when(
+      PSURV_years >= 3.000001 ~ 3,
+      PSURV_years <= 3 ~ PSURV_years
+    ))
+
+#3-year PCENS
+bound2 <- bound2 %>% mutate(PCENS_3year =
+                              case_when(
+                                PSURV_years <= 3 ~ PCENS,
+                                PSURV_years > 3 ~ 0
+                              ))
+
+#5year PSURV
+bound2 <- bound2 %>% mutate(PSURV_5year =
+    case_when(
+      PSURV_years >= 5.000001 ~ 5,
+      PSURV_years <= 5 ~ PSURV_years
+    ))
+
+#5-year PCENS
+bound2 <- bound2 %>% mutate(PCENS_5year =
+                              case_when(
+                                PSURV_years <= 5 ~ PCENS,
+                                PSURV_years > 5 ~ 0
+                              ))
+
+#10year PSURV
+bound2 <- bound2 %>% mutate(PSURV_10year =
+    case_when(
+      PSURV_years >= 10.000001 ~ 10,
+      PSURV_years <= 10 ~ PSURV_years
+    ))
+
+#5-year PCENS
+bound2 <- bound2 %>% mutate(PCENS_10year =
+                              case_when(
+                                PSURV_years <= 10 ~ PCENS,
+                                PSURV_years > 10 ~ 0
+                              ))
+
+
+```
+
+**Crosstabulating** 
+```{r}
+ftable(xtabs(cbind(PCENS,GCENS)~ COUNTRY, data=bound2))
+ftable(xtabs(cbind(PCENS,GCENSnew)~ COUNTRY, data=bound2))
+```
+
+**Tables**
+```{r}
+#All groups
+tab1 <- tableby(COUNTRY ~
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              DTYPE+
+              DCMV+
+              DONCOD,
+                data=bound2, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Donor characteristics', pfootnote=TRUE, digits = 2)
+
+#UK and US
+ukandus <- bound2 %>% filter(COUNTRY == "UK" | COUNTRY == "US")
+tab1 <- tableby(COUNTRY ~
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              DTYPE+
+              DCMV+
+              DONCOD,
+                data=ukandus, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Donor characteristics', pfootnote=TRUE, digits = 2)
+
+#UK and CAN
+ukandcan <- bound2 %>% filter(COUNTRY == "UK" | COUNTRY == "CAN")
+tab1 <- tableby(COUNTRY ~
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              DTYPE+
+              DCMV+
+              DONCOD,
+                data=ukandcan, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Donor characteristics', pfootnote=TRUE, digits = 2)
+
+#US and CAN
+usandcan <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "CAN")
+tab1 <- tableby(COUNTRY ~
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              DTYPE+
+              DCMV+
+              DONCOD,
+                data=usandcan, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Donor characteristics', pfootnote=TRUE, digits = 2)
+
+#Some pairwise things
+#pairwise.wilcox.test(bound2$CIT,
+#                          bound2$COUNTRY,
+#                          p.adjust.method="fdr")
+
+#M <- as.table(rbind(c(762, 327, 468), c(484, 239, 477)))
+#dimnames(M) <- list(gender = c("F", "M"),
+#                    party = c("Democrat","Independent", "Republican"))
+#chisq.posthoc.test(M,
+#                   method = "bonferroni")
+
+
+
+#M <- table(bound2$MILAN, bound2$COUNTRY)
+#M
+
+#chisq.posthoc.test(M,
+#                   method = "bonferroni")
+
+
+
+
+```
+
+**More tables**
+```{r}
+tab1 <- tableby(COUNTRY ~ 
+              RSEX+
+              RETHNIC+
+              MELD+
+              MELD_calculated+
+              RREN_SUP+
+              RAGE+
+              #RLIFE+
+              #RVENT+
+              WAITLIST_TIME+
+              TX_YR+
+              BMI+
+              #RAB_SURGERY+
+              RCREAT+
+              RBILIRUBIN+
+              RALBUMIN+
+              RINR+
+              RANTI_HCV+
+              RBG+
+              #RASCITES+
+              #RENCEPH+ 
+              #BLD_GP_MATCH + 
+              NASH +
+              ALF + 
+              HCV +
+              PSC +
+              HBV + 
+              PBC + 
+              ALD +
+              AID +
+              MET +
+              OTH,
+                data=bound2, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Recipient characteristics', pfootnote=TRUE, digits = 2)
+
+#UK and US
+tab1 <- tableby(COUNTRY ~ 
+              RSEX+
+              RETHNIC+
+              MELD+
+              MELD_calculated+
+              RREN_SUP+
+              RAGE+
+              RLIFE+
+              RVENT+
+              WAITLIST_TIME+
+              TX_YR+
+              BMI+
+              RAB_SURGERY+
+              RCREAT+
+              RBILIRUBIN+
+              RALBUMIN+
+              RINR+
+              RANTI_HCV+
+              RBG+
+              RASCITES+
+              RENCEPH+ 
+              BLD_GP_MATCH,
+                data=ukandus, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Recipient characteristics', pfootnote=TRUE, digits = 2)
+
+#UK and CAN
+tab1 <- tableby(COUNTRY ~ 
+              RSEX+
+              RETHNIC+
+              MELD+
+              MELD_calculated+
+              RREN_SUP+
+              RAGE+
+              RLIFE+
+              RVENT+
+              WAITLIST_TIME+
+              TX_YR+
+              BMI+
+              RAB_SURGERY+
+              RCREAT+
+              RBILIRUBIN+
+              RALBUMIN+
+              RINR+
+              RANTI_HCV+
+              RBG+
+              RASCITES+
+              RENCEPH+ 
+              BLD_GP_MATCH,
+                data=ukandcan, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Recipient characteristics', pfootnote=TRUE, digits = 2)
+
+#US and CAN
+tab1 <- tableby(COUNTRY ~ 
+              RSEX+
+              RETHNIC+
+              MELD+
+              MELD_calculated+
+              RREN_SUP+
+              RAGE+
+              RLIFE+
+              RVENT+
+              WAITLIST_TIME+
+              TX_YR+
+              BMI+
+              RAB_SURGERY+
+              RCREAT+
+              RBILIRUBIN+
+              RALBUMIN+
+              RINR+
+              RANTI_HCV+
+              RBG+
+              RASCITES+
+              RENCEPH+ 
+              BLD_GP_MATCH,
+                data=usandcan, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Recipient characteristics', pfootnote=TRUE, digits = 2)
+```
+
+**Subsetted tables**
+```{r}
+bound2subset <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UK" | COUNTRY == "UHN")
+bound2subset$COUNTRY <- factor(bound2subset$COUNTRY, ordered=FALSE)
+bound2subset$COUNTRY <- relevel(bound2subset$COUNTRY, ref="US")
+
+tab1 <- tableby(COUNTRY ~ 
+              MILAN+
+              MAX_TUMOR+
+              TOTAL_DIAMETER+
+              STRAT_AFP+
+              TUMOR_NUMBER+
+              TUMORNUM,
+                data=bound2subset, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Tumor characteristics on waitlist', pfootnote=TRUE, digits = 2)
+
+#UK and US
+tab1 <- tableby(COUNTRY ~ 
+              MILAN+
+              MAX_TUMOR+
+              TOTAL_DIAMETER+
+              STRAT_AFP+
+              TUMOR_NUMBER+
+              TUMORNUM,
+                data=ukandus, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Tumor characteristics on waitlist', pfootnote=TRUE, digits = 2)
+
+#UK and UHN
+ukanduhn <- bound2 %>% filter(COUNTRY == "UK" | COUNTRY == "UHN")
+tab1 <- tableby(COUNTRY ~ 
+              MILAN+
+              MAX_TUMOR+
+              TOTAL_DIAMETER+
+              STRAT_AFP+
+              TUMOR_NUMBER+
+              TUMORNUM,
+                data=ukanduhn, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Tumor characteristics on waitlist', pfootnote=TRUE, digits = 2)
+
+#US and UHN
+usanduhn <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UHN")
+tab1 <- tableby(COUNTRY ~ 
+              MILAN+
+              MAX_TUMOR+
+              TOTAL_DIAMETER+
+              STRAT_AFP+
+              TUMOR_NUMBER+
+              TUMORNUM,
+                data=usanduhn, test=TRUE, total=TRUE, 
+                numeric.stats=c("medianq1q3"), numeric.test="kwt", cat.test="chisq")
+summary(tab1, title='Tumor characteristics on waitlist', pfootnote=TRUE, digits = 2)
+
+
+##Pairwise
+#library(RVAideMemoire)
+##START HERE WTF
+
+#forpairwise <- bound2subset %>% select(COUNTRY, MILAN)
+#forpairwise$COUNTRY <- droplevels(forpairwise$COUNTRY)
+#levels(forpairwise$COUNTRY)
+#levels(forpairwise$COUNTRY)
+
+#??chisq.multcomp()
+#chisq.multcomp(forpairwise, p.method = "fdr")
+
+```
+
+**Summaries for survival**
+```{r}
+summary(tableby(COUNTRY ~ Surv(PSURV_years, PCENS), data=bound2, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_90day, PCENS_90day), data=bound2, times=1:90, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_1year, PCENS_1year), data=bound2, times=1:1, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_3year, PCENS_3year), data=bound2, times=1:3, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_5year, PCENS_5year), data=bound2, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_10year, PCENS_10year), data=bound2, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(survfit(Surv(PSURV_years, PCENS)~COUNTRY, data=bound2), times=1:10)
+
+fit4 <- pairwise_survdiff(Surv(PSURV_years, PCENS) ~ COUNTRY , data = bound2)
+fit4
+
+symnum(fit4$p.value, cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 0.1, 1),
+   symbols = c("****", "***", "**", "*", "+", " "),
+   abbr.colnames = FALSE, na = "")
+```
+
+**OS**
+```{r}
+levels(bound2$COUNTRY)
+fit1 <- survfit(Surv(PSURV_years, PCENS) ~ COUNTRY, data = bound2)
+
+ggsurv1 <- ggsurvplot(
+           fit1,               
+           data = bound2,          
+           risk.table = TRUE,     
+           pval = TRUE,          
+           conf.int = F,         
+           xlim = c(0,5),         
+           xlab = "Years from LT",
+           palette = "npg",
+           break.time.by = 1,  
+           title = "Overall patient survival after liver transplantation stratified by country of LT",
+      # subtitle = "with 95% confidence intervals",
+               ggtheme = theme_test(base_size=20, base_family = "Helvetica"),
+         # risk.table.y.text.col = F,
+         risk.table.height = 0.20,
+        #  risk.table.y.text = T,
+        #  surv.median.line = "hv", 
+           legend.title= "",
+          legend.labs =
+           c("United States", "Canada", "UHN", "United Kingdom")
+        )
+ggsurv1
+```
+
+**OS inside Milan**
+```{r}
+bound2milan <- bound2 %>% filter(COUNTRY!="CAN" & MILAN=="Milan") %>% droplevels()
+levels(bound2milan$COUNTRY)
+fit1 <- survfit(Surv(PSURV_years, PCENS) ~ COUNTRY, data = bound2milan)
+
+ggsurv1 <- ggsurvplot(
+           fit1,               
+           data = bound2milan,          
+           risk.table = TRUE,     
+           pval = TRUE,          
+           conf.int = F,         
+           xlim = c(0,5),         
+           xlab = "Years from LT",
+           palette = "npg",
+           break.time.by = 1,  
+           title = "Overall patient survival after liver transplantation stratified by country of LT",
+      # subtitle = "with 95% confidence intervals",
+               ggtheme = theme_test(base_size=20, base_family = "Helvetica"),
+         # risk.table.y.text.col = F,
+         risk.table.height = 0.20,
+        #  risk.table.y.text = T,
+        #  surv.median.line = "hv", 
+           legend.title= "",
+          legend.labs =
+           c("United States", "UHN", "United Kingdom")
+        )
+ggsurv1
+
+summary(tableby(COUNTRY ~ Surv(PSURV_years, PCENS), data=bound2milan, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_1year, PCENS_1year), data=bound2milan, times=1:1, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_3year, PCENS_3year), data=bound2milan, times=1:3, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_5year, PCENS_5year), data=bound2milan, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_10year, PCENS_10year), data=bound2milan, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(survfit(Surv(PSURV_years, PCENS)~COUNTRY, data=bound2milan), times=1:5)
+
+```
+
+**OS outside Milan**
+```{r}
+bound2outsidemilan <- bound2 %>% filter(COUNTRY!="CAN" & MILAN!="Milan") %>% droplevels()
+levels(bound2outsidemilan$COUNTRY)
+fit1 <- survfit(Surv(PSURV_years, PCENS) ~ COUNTRY, data = bound2outsidemilan)
+
+ggsurv1 <- ggsurvplot(
+           fit1,               
+           data = bound2outsidemilan,          
+           risk.table = TRUE,     
+           pval = TRUE,          
+           conf.int = F,         
+           xlim = c(0,5),         
+           xlab = "Years from LT",
+           palette = "npg",
+           break.time.by = 1,  
+           title = "Overall patient survival after liver transplantation stratified by country of LT",
+      # subtitle = "with 95% confidence intervals",
+               ggtheme = theme_test(base_size=20, base_family = "Helvetica"),
+         # risk.table.y.text.col = F,
+         risk.table.height = 0.20,
+        #  risk.table.y.text = T,
+        #  surv.median.line = "hv", 
+           legend.title= "",
+          legend.labs =
+           c("United States", "UHN", "United Kingdom")
+        )
+ggsurv1
+
+
+
+summary(tableby(COUNTRY ~ Surv(PSURV_years, PCENS), data=bound2outsidemilan, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_1year, PCENS_1year), data=bound2outsidemilan, times=1:1, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_3year, PCENS_3year), data=bound2outsidemilan, times=1:3, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_5year, PCENS_5year), data=bound2outsidemilan, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_10year, PCENS_10year), data=bound2outsidemilan, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(survfit(Surv(PSURV_years, PCENS)~COUNTRY, data=bound2outsidemilan), times=1:5)
+```
+
+**OS except UHN**
+```{r}
+bound2withoutUHN <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UK" | COUNTRY == "CAN") %>% droplevels()
+levels(bound2withoutUHN$COUNTRY)
+
+fit1 <- survfit(Surv(PSURV_years, PCENS) ~ COUNTRY, data = bound2withoutUHN)
+
+ggsurv1 <- ggsurvplot(
+           fit1,               
+           data = bound2withoutUHN,          
+           risk.table = TRUE,     
+           pval = TRUE,          
+           conf.int = F,         
+           xlim = c(0,5),         
+           xlab = "Years from LT",
+           palette = "npg",
+           break.time.by = 1,  
+           title = "Overall patient survival after liver transplantation stratified by country of LT",
+      # subtitle = "with 95% confidence intervals",
+               ggtheme = theme_test(base_size=20, base_family = "Helvetica"),
+         # risk.table.y.text.col = F,
+         risk.table.height = 0.20,
+        #  risk.table.y.text = T,
+        #  surv.median.line = "hv", 
+           legend.title= "",
+          legend.labs =
+           c("United States", "Canada", "United Kingdom")
+        )
+ggsurv1
+
+summary(tableby(COUNTRY ~ Surv(PSURV_years, PCENS), data=bound2withoutUHN, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_1year, PCENS_1year), data=bound2withoutUHN, times=1:1, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_3year, PCENS_3year), data=bound2withoutUHN, times=1:3, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_5year, PCENS_5year), data=bound2withoutUHN, times=1:5, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(tableby(COUNTRY ~ Surv(PSURV_10year, PCENS_10year), data=bound2withoutUHN, times=1:10, surv.stats=c("NeventsSurv", "NriskSurv")))
+
+summary(survfit(Surv(PSURV_years, PCENS)~COUNTRY, data=bound2withoutUHN), times=1:10)
+
+fit4 <- pairwise_survdiff(Surv(PSURV_years, PCENS) ~ COUNTRY , data = bound2withoutUHN)
+fit4
+
+symnum(fit4$p.value, cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 0.1, 1),
+   symbols = c("****", "***", "**", "*", "+", " "),
+   abbr.colnames = FALSE, na = "")
+
+```
+
+**US vs. UK vs. UHN**
+```{r}
+bound3 <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UK" | COUNTRY == "UHN")
+
+t1 <- coxph(formula= Surv(PSURV, PCENS)~ bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$MAX_TUMOR+
+              bound3$TUMOR_NUMBER+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$STRAT_AFP+
+              bound3$TX_YR,
+data=bound3) %>%
+  tbl_regression(exponentiate = TRUE)
+t1
+```
+
+**US vs. UK vs. CAN**
+**Forest model patient survival**
+```{r}
+bound4 <- bound2 %>% filter(COUNTRY == "US" | COUNTRY == "UK" | COUNTRY == "CAN")
+
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$CIT+
+              bound4$RSEX+
+              bound4$BMI+
+              bound4$RBILIRUBIN+
+              bound4$RINR+
+              bound4$RCREAT+
+              bound4$RREN_SUP+
+              bound4$DAGE+
+              bound4$DBMI+
+              bound4$RAGE+
+              bound4$WAITLIST_TIME+
+              bound4$DTYPE+
+              bound4$DSEX+
+              bound4$TX_YR,
+        data=bound4)
+forest_model(cox1) 
+
+#Landmark at 90 days
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$CIT+
+              bound4$RSEX+
+              bound4$BMI+
+              bound4$RBILIRUBIN+
+              bound4$RINR+
+              bound4$RCREAT+
+              bound4$RREN_SUP+
+              bound4$DAGE+
+              bound4$DBMI+
+              bound4$RAGE+
+              bound4$WAITLIST_TIME+
+              bound4$DTYPE+
+              bound4$DSEX+
+              bound4$TX_YR,
+              subset = PSURV_years <= 0.2464066,
+        data=bound4)
+forest_model(cox1) 
+
+#Landmark 90 days to 2 years
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$CIT+
+              bound4$RSEX+
+              bound4$BMI+
+              bound4$RBILIRUBIN+
+              bound4$RINR+
+              bound4$RCREAT+
+              bound4$RREN_SUP+
+              bound4$DAGE+
+              bound4$DBMI+
+              bound4$RAGE+
+              bound4$WAITLIST_TIME+
+              bound4$DTYPE+
+              bound4$DSEX+
+              bound4$TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 2,
+        data=bound4)
+forest_model(cox1) 
+
+#Landmark 5
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$CIT+
+              bound4$RSEX+
+              bound4$BMI+
+              bound4$RBILIRUBIN+
+              bound4$RINR+
+              bound4$RCREAT+
+              bound4$RREN_SUP+
+              bound4$DAGE+
+              bound4$DBMI+
+              bound4$RAGE+
+              bound4$WAITLIST_TIME+
+              bound4$DTYPE+
+              bound4$DSEX+
+              bound4$TX_YR,
+              subset = PSURV_years > 2 & PSURV_years <= 5,
+        data=bound4)
+forest_model(cox1) 
+
+#Uni
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY,
+        data=bound4)
+forest_model(cox1) 
+
+#Just donor
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$CIT+
+              bound4$DAGE+
+              bound4$DBMI+
+              bound4$DTYPE+
+              bound4$DSEX+
+              bound4$TX_YR,
+        data=bound4)
+forest_model(cox1) 
+
+#Just recipient
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound4$COUNTRY+
+              bound4$RSEX+
+              bound4$BMI+  
+              bound4$RBILIRUBIN+
+              bound4$RINR+
+              bound4$RCREAT+
+              bound4$RREN_SUP+
+              bound4$RAGE+
+              bound4$WAITLIST_TIME+
+              bound4$TX_YR,
+        data=bound4)
+forest_model(cox1) 
+
+```
+
+**UK vs. US vs. UHN**
+**Forest model patient survival**
+```{r}
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+        data=bound3)
+forest_model(cox1) 
+
+#Landmark at 90 days
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+              subset = PSURV_years <= 0.2464066,
+        data=bound3)
+forest_model(cox1) 
+
+#Landmark 90 days to 5 years
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5,
+        data=bound3)
+forest_model(cox1) 
+
+#Uni
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY,
+        data=bound3)
+forest_model(cox1) 
+
+#Just donor
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+        data=bound3)
+forest_model(cox1) 
+
+#Just recipient
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$TX_YR,
+        data=bound3)
+forest_model(cox1) 
+
+#SUBGROUP WITH MILAN
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR, subset = MILAN == "Milan",
+              data=bound3)
+forest_model(cox1) 
+
+#Landmark at 90 days
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+              subset = MILAN == "Milan" & PSURV_years <= 0.2464066,
+        data=bound3)
+forest_model(cox1) 
+
+#Landmark 90 days to 5 years
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound3$COUNTRY+
+              bound3$CIT+
+              bound3$RSEX+
+              bound3$BMI+
+              bound3$RBILIRUBIN+
+              bound3$RINR+
+              bound3$RCREAT+
+              bound3$RREN_SUP+
+              bound3$DAGE+
+              bound3$DBMI+
+              bound3$RAGE+
+              bound3$WAITLIST_TIME+
+              bound3$DTYPE+
+              bound3$DSEX+
+              bound3$TX_YR,
+              subset = MILAN == "Milan" & PSURV_years > 0.2464066 & PSURV_years <= 5,
+        data=bound3)
+forest_model(cox1) 
+```
+
+**CAN vs. UHN**
+```{r}
+bound5 <- bound2 %>% filter(COUNTRY == "CAN" | COUNTRY == "UHN")
+
+t1 <- coxph(formula= Surv(PSURV, PCENS)~ bound5$COUNTRY,
+data=bound5) %>%
+  tbl_regression(exponentiate = TRUE)
+t1
+
+t1 <- coxph(formula= Surv(PSURV, PCENS)~ bound5$COUNTRY+
+              bound5$CIT+
+              bound5$RSEX+
+              bound5$RBILIRUBIN+
+              bound5$RINR+
+              bound5$RCREAT+
+              bound5$DAGE+
+              bound5$DBMI+
+              bound5$RAGE+
+              bound5$WAITLIST_TIME+
+              bound5$DTYPE+
+              bound5$BMI+
+              bound5$DSEX+
+              bound5$TX_YR,
+data=bound5) %>%
+  tbl_regression(exponentiate = TRUE)
+t1
+```
+
+**sensitivity analysis with tumor variables UK vs. US vs. UHN**
+```{r}
+#Uni
+#cox1 <- coxph(formula=Surv(PSURV_years,PCENS)~bound2subset$COUNTRY,
+#        data=bound2subset)
+#forest_model(cox1) 
+
+#Donor only
+#cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+#              bound2subset$CIT+
+#              bound2subset$DAGE+
+#              bound2subset$DBMI+
+#              bound2subset$DTYPE+
+#              bound2subset$DSEX+
+#              bound2subset$GRAFT_TYPE,
+#        data=bound2subset)
+#forest_model(cox1) 
+
+#Recipient
+#cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+#              bound2subset$RSEX+
+#              bound2subset$RETHNIC+
+#             bound2subset$MELD+
+#              bound2subset$RREN_SUP+
+#              bound2subset$RAGE+
+#              bound2subset$WAITLIST_TIME,
+#        data=bound2subset)
+#forest_model(cox1) 
+
+#Donor and recipient
+#cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+#              bound2subset$CIT+
+#              bound2subset$RSEX+
+#              bound2subset$RETHNIC+
+#              bound2subset$MELD+
+#              bound2subset$RREN_SUP+
+#              bound2subset$DAGE+
+#              bound2subset$DBMI+
+#              bound2subset$RAGE+
+#              bound2subset$WAITLIST_TIME+
+#              bound2subset$DTYPE+
+#              bound2subset$DSEX+
+#              bound2subset$GRAFT_TYPE,
+#        data=bound2subset)
+#forest_model(cox1) 
+
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+              bound2subset$CIT+
+              bound2subset$RSEX+
+              bound2subset$BMI+
+              bound2subset$RBILIRUBIN+
+              bound2subset$RINR+
+              bound2subset$RCREAT+
+              bound2subset$RREN_SUP+
+              bound2subset$DAGE+
+              bound2subset$DBMI+
+              bound2subset$RAGE+
+              bound2subset$WAITLIST_TIME+
+              bound2subset$DTYPE+
+              bound2subset$DSEX+
+              bound2subset$TUMOR_NUMBER +
+              bound2subset$MAX_TUMOR +
+              bound2subset$STRAT_AFP+
+              bound2subset$TX_YR,
+        data=bound2subset)
+forest_model(cox1) 
+
+#90 days
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+              bound2subset$CIT+
+              bound2subset$RSEX+
+              bound2subset$BMI+
+              bound2subset$RBILIRUBIN+
+              bound2subset$RINR+
+              bound2subset$RCREAT+
+              bound2subset$RREN_SUP+
+              bound2subset$DAGE+
+              bound2subset$DBMI+
+              bound2subset$RAGE+
+              bound2subset$WAITLIST_TIME+
+              bound2subset$DTYPE+
+              bound2subset$DSEX+
+              bound2subset$TUMOR_NUMBER +
+              bound2subset$MAX_TUMOR +
+              bound2subset$STRAT_AFP+
+              bound2subset$TX_YR,
+              subset = PSURV_years <= 0.2464066,
+        data=bound2subset)
+forest_model(cox1) 
+
+#Landmark 90 days to 5 years
+cox1 <- coxph(formula= Surv(PSURV_years,PCENS)~bound2subset$COUNTRY+
+              bound2subset$CIT+
+              bound2subset$RSEX+
+              bound2subset$BMI+
+              bound2subset$RBILIRUBIN+
+              bound2subset$RINR+
+              bound2subset$RCREAT+
+              bound2subset$RREN_SUP+
+              bound2subset$DAGE+
+              bound2subset$DBMI+
+              bound2subset$RAGE+
+              bound2subset$WAITLIST_TIME+
+              bound2subset$DTYPE+
+              bound2subset$DSEX+
+              bound2subset$GRAFT_TYPE+
+              bound2subset$TUMOR_NUMBER +
+              bound2subset$MAX_TUMOR +
+              bound2subset$STRAT_AFP+
+              bound2subset$TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5,
+        data=bound2subset)
+forest_model(cox1) 
+```
+
+**Multiple imputations**
+```{r eval = FALSE}
+library(mice)
+
+UKvUSvCANvsUHNforimputation <- bound2 %>% select(TX_YR, RAGE, PSURV, PCENS, DAGE, DTYPE, DONCOD, DBMI, DCMV, DSEX, BLD_GP_MATCH, GRAFT_TYPE, CIT, RSEX, RETHNIC, BMI, WAITLIST_TIME, TRANSPLANT_UNIT, MELD, RREN_SUP, RVENT, RAB_SURGERY, RLIFE, RASCITES, RENCEPH, RBG, RANTI_HCV, RALBUMIN, RINR, RBILIRUBIN, RCREAT, COUNTRY, UKT_PLDGRP, MILAN, EXTENDED, TUMORNUM, TUMOR_NUMBER, AFP, STRAT_AFP, TOTAL_DIAMETER, MAX_TUMOR, NASH, ALF, HCV, PSC, HBV, PBC, ALD, AID, MET, OTH, PSURV_years, PSURV_1year, PCENS_1year, PSURV_3year, PCENS_3year, PSURV_5year, PCENS_5year, UHN)
+
+sapply(UKvUSvCANvsUHNforimputation, function(x) sum(is.na(x)))
+
+#Imputation
+init1 <- mice(UKvUSvCANvsUHNforimputation, m=20, maxit=20, seed = 999)
+
+init1$method
+
+imputed <- complete(init1, 3)
+summary(init1)
+densityplot(init1)
+
+sapply(UKvUSvCANvsUHNforimputation, function(x) sum(is.na(x)))
+```
+
+**Table 2**
+```{r}
+imp_notUHN <- filter(init1, COUNTRY != "UHN") 
+
+
+#With CAN instead of UHN
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Uni
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset =  PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Just donor
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Just recipient
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_notUHN, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+```
+
+**Table UHN and CAN**
+```{r}
+#UHN vs CAN
+imp_uhnvscan <- filter(init1, COUNTRY == "UHN" | (COUNTRY == "CAN" & UHN == 0)) 
+
+#Uni
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+
+#Recipient and donor
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_uhnvscan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+```
+
+**Table UK US UHN**
+```{r}
+imp_ukusuhn <- filter(init1, COUNTRY != "CAN") 
+
+#Uni
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Just donor
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              DAGE+
+              DBMI+
+              DTYPE+
+              DSEX+
+              GRAFT_TYPE+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Just recipient
+#Recipient
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+  
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Just tumor
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP+
+              TX_YR, subset = COUNTRY != "CAN" & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+
+#Recipient and donor
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+  
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient tumor and donor
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              TX_YR+
+              NASH+
+              ALD+
+              HCV+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              TX_YR+
+              NASH+
+              ALD+
+              HCV+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_ukusuhn, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              TX_YR+
+              NASH+
+              ALD+
+              HCV+  
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+```
+
+**Table 3**
+```{r}
+imp_ukusuhnwithinmilan <- filter(init1, COUNTRY != "CAN" & MILAN == "Milan") 
+#WITHIN MILAN ONLY
+#Uni
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+  
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient and donor
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_ukusuhnwithinmilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+```
+
+**Table 4**
+```{r}
+imp_ukusuhnoutsidemilan <- filter(init1, COUNTRY != "CAN" & MILAN != "Milan") 
+#OUTSIDE MILAN ONLY
+#Uni
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              RAGE+
+              WAITLIST_TIME+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Recipient and donor
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+
+#Recipient, donor and tumor
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP+
+              TX_YR, subset = PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 0-90
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP+
+              TX_YR, subset = PSURV_years <= 0.2464066))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+#Landmark 90days-5years
+coximpute <- with(imp_ukusuhnoutsidemilan, coxph(Surv(PSURV,PCENS)~ COUNTRY+
+              CIT+
+              RSEX+
+              BMI+
+              RINR+
+              RBILIRUBIN+
+              RCREAT+
+              RREN_SUP+
+              DAGE+
+              DBMI+
+              RAGE+
+              WAITLIST_TIME+
+              DTYPE+
+              DSEX+
+              NASH+
+              ALD+
+              HCV+
+              TUMOR_NUMBER +
+              MAX_TUMOR +
+              STRAT_AFP+
+              TX_YR,
+              subset = PSURV_years > 0.2464066 & PSURV_years <= 5))
+summary(pool(coximpute), conf.int = T, exponentiate = T)
+
+```
+
+
+
+
+
